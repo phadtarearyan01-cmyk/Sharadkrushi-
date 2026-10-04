@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-
     paths:
       - "**/*.zip"
       - ".github/workflows/universal-zip-deploy.yml"
@@ -13,6 +12,7 @@ on:
 
 permissions:
   contents: read
+  deployments: write
 
 concurrency:
   group: production-deployment
@@ -22,20 +22,21 @@ jobs:
   build-and-deploy:
     name: Extract → Build → Verify → Deploy
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
 
-      # --------------------------------------------------
-      # 1. Download repository
-      # --------------------------------------------------
+      # ==========================================
+      # 1. Checkout GitHub repository
+      # ==========================================
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
 
-      # --------------------------------------------------
-      # 2. Find latest ZIP
-      # --------------------------------------------------
+      # ==========================================
+      # 2. Find ZIP
+      # ==========================================
 
       - name: Find application ZIP
         id: find_zip
@@ -50,19 +51,19 @@ jobs:
             | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: No application ZIP found."
+            echo "❌ ERROR: No ZIP file found."
             exit 1
           fi
 
-          echo "Application ZIP:"
+          echo "✅ ZIP found:"
           echo "$ZIP_FILE"
 
           echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
 
 
-      # --------------------------------------------------
-      # 3. Clean previous extraction
-      # --------------------------------------------------
+      # ==========================================
+      # 3. Prepare extraction folder
+      # ==========================================
 
       - name: Prepare application directory
         run: |
@@ -70,9 +71,9 @@ jobs:
           mkdir -p app
 
 
-      # --------------------------------------------------
+      # ==========================================
       # 4. Extract ZIP
-      # --------------------------------------------------
+      # ==========================================
 
       - name: Extract application ZIP
         shell: bash
@@ -83,12 +84,12 @@ jobs:
             "${{ steps.find_zip.outputs.zip_file }}" \
             -d app
 
-          echo "ZIP extracted successfully."
+          echo "✅ ZIP extracted."
 
 
-      # --------------------------------------------------
-      # 5. Find package.json automatically
-      # --------------------------------------------------
+      # ==========================================
+      # 5. Find package.json
+      # ==========================================
 
       - name: Detect project root
         id: detect_project
@@ -103,71 +104,77 @@ jobs:
             | head -n 1)
 
           if [ -z "$PACKAGE_JSON" ]; then
-            echo "ERROR: package.json was not found."
+            echo "❌ ERROR: package.json not found."
             echo ""
-            echo "Files inside ZIP:"
+            echo "Files found:"
             find app -maxdepth 3 -type f | head -200
             exit 1
           fi
 
           PROJECT_DIR=$(dirname "$PACKAGE_JSON")
 
-          echo "Detected project:"
+          echo "✅ Project detected:"
           echo "$PROJECT_DIR"
 
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
 
 
-      # --------------------------------------------------
-      # 6. Detect Node version
-      # --------------------------------------------------
+      # ==========================================
+      # 6. Setup Node
+      # ==========================================
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 20
 
 
-      # --------------------------------------------------
+      # ==========================================
       # 7. Detect package manager
-      # --------------------------------------------------
+      # ==========================================
 
       - name: Detect package manager
         id: package_manager
         working-directory: ${{ steps.detect_project.outputs.project_dir }}
         shell: bash
         run: |
+
           if [ -f "pnpm-lock.yaml" ]; then
             echo "manager=pnpm" >> "$GITHUB_OUTPUT"
+            echo "✅ Using pnpm"
 
           elif [ -f "yarn.lock" ]; then
             echo "manager=yarn" >> "$GITHUB_OUTPUT"
+            echo "✅ Using yarn"
 
           elif [ -f "package-lock.json" ]; then
             echo "manager=npm" >> "$GITHUB_OUTPUT"
+            echo "✅ Using npm"
 
           else
             echo "manager=npm-install" >> "$GITHUB_OUTPUT"
+            echo "⚠️ No lock file found. Using npm install."
           fi
 
 
-      # --------------------------------------------------
-      # 8. Enable package managers
-      # --------------------------------------------------
+      # ==========================================
+      # 8. Enable Corepack
+      # ==========================================
 
       - name: Enable Corepack
         run: |
           corepack enable || true
 
 
-      # --------------------------------------------------
+      # ==========================================
       # 9. Install dependencies
-      # --------------------------------------------------
+      # ==========================================
 
       - name: Install dependencies
         working-directory: ${{ steps.detect_project.outputs.project_dir }}
         shell: bash
         run: |
+
           set -e
 
           MANAGER="${{ steps.package_manager.outputs.manager }}"
@@ -186,9 +193,9 @@ jobs:
           fi
 
 
-      # --------------------------------------------------
-      # 10. Show available scripts
-      # --------------------------------------------------
+      # ==========================================
+      # 10. Show project scripts
+      # ==========================================
 
       - name: Inspect package scripts
         working-directory: ${{ steps.detect_project.outputs.project_dir }}
@@ -200,14 +207,15 @@ jobs:
           "
 
 
-      # --------------------------------------------------
-      # 11. Build application
-      # --------------------------------------------------
+      # ==========================================
+      # 11. Build
+      # ==========================================
 
       - name: Build application
         working-directory: ${{ steps.detect_project.outputs.project_dir }}
         shell: bash
         run: |
+
           set -e
 
           MANAGER="${{ steps.package_manager.outputs.manager }}"
@@ -223,26 +231,26 @@ jobs:
           fi
 
 
-      # --------------------------------------------------
-      # 12. Verify build output
-      # --------------------------------------------------
+      # ==========================================
+      # 12. Verify dist
+      # ==========================================
 
       - name: Verify production build
         working-directory: ${{ steps.detect_project.outputs.project_dir }}
         shell: bash
         run: |
+
           set -e
 
           if [ ! -d "dist" ]; then
-            echo "ERROR: dist directory was not created."
+            echo "❌ ERROR: dist directory was not created."
             exit 1
           fi
 
           echo ""
-          echo "================================"
-          echo "BUILD SUCCESSFUL"
-          echo "================================"
-          echo ""
+          echo "======================================"
+          echo "✅ BUILD SUCCESSFUL"
+          echo "======================================"
 
           du -sh dist
 
@@ -251,11 +259,11 @@ jobs:
           find dist -maxdepth 2 -type f | head -100
 
 
-      # --------------------------------------------------
-      # 13. Upload dist as GitHub artifact
-      # --------------------------------------------------
+      # ==========================================
+      # 13. Save dist
+      # ==========================================
 
-      - name: Save production build
+      - name: Upload production artifact
         uses: actions/upload-artifact@v4
         with:
           name: production-dist
@@ -263,45 +271,89 @@ jobs:
           if-no-files-found: error
 
 
-      # --------------------------------------------------
+      # ==========================================
       # 14. Check Cloudflare configuration
-      # --------------------------------------------------
+      # ==========================================
 
       - name: Detect Cloudflare configuration
-        id: cloudflare
+        id: cloudflare_config
         working-directory: ${{ steps.detect_project.outputs.project_dir }}
         shell: bash
         run: |
+
           if [ -f "wrangler.toml" ]; then
-            echo "wrangler_config=wrangler.toml" >> "$GITHUB_OUTPUT"
-            echo "Cloudflare configuration detected: wrangler.toml"
+            echo "config=wrangler.toml" >> "$GITHUB_OUTPUT"
+            echo "✅ Found wrangler.toml"
 
           elif [ -f "wrangler.json" ]; then
-            echo "wrangler_config=wrangler.json" >> "$GITHUB_OUTPUT"
-            echo "Cloudflare configuration detected: wrangler.json"
+            echo "config=wrangler.json" >> "$GITHUB_OUTPUT"
+            echo "✅ Found wrangler.json"
 
           elif [ -f "wrangler.jsonc" ]; then
-            echo "wrangler_config=wrangler.jsonc" >> "$GITHUB_OUTPUT"
-            echo "Cloudflare configuration detected: wrangler.jsonc"
+            echo "config=wrangler.jsonc" >> "$GITHUB_OUTPUT"
+            echo "✅ Found wrangler.jsonc"
 
           else
-            echo "wrangler_config=none" >> "$GITHUB_OUTPUT"
-            echo "No Wrangler configuration found."
+            echo "config=none" >> "$GITHUB_OUTPUT"
+            echo "❌ No Wrangler configuration found."
           fi
 
 
-      # --------------------------------------------------
-      # 15. Deploy to Cloudflare Workers
-      # --------------------------------------------------
+      # ==========================================
+      # 15. Verify Cloudflare secrets
+      # ==========================================
 
-      - name: Deploy to Cloudflare
-        if: steps.cloudflare.outputs.wrangler_config != 'none'
-        working-directory: ${{ steps.detect_project.outputs.project_dir }}
+      - name: Verify Cloudflare credentials
+        if: steps.cloudflare_config.outputs.config != 'none'
         shell: bash
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          set -e
 
-          npx wrangler deploy
+          if [ -z "$CF_TOKEN" ]; then
+            echo "❌ CLOUDFLARE_API_TOKEN is missing."
+            echo ""
+            echo "Go to:"
+            echo "GitHub → Settings → Secrets and variables → Actions"
+            exit 1
+          fi
+
+          if [ -z "$CF_ACCOUNT" ]; then
+            echo "❌ CLOUDFLARE_ACCOUNT_ID is missing."
+            echo ""
+            echo "Go to:"
+            echo "GitHub → Settings → Secrets and variables → Actions"
+            exit 1
+          fi
+
+          echo "✅ Cloudflare credentials detected."
+
+
+      # ==========================================
+      # 16. Deploy to Cloudflare
+      # ==========================================
+
+      - name: Build and Deploy to Cloudflare
+        if: steps.cloudflare_config.outputs.config != 'none'
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: ${{ steps.detect_project.outputs.project_dir }}
+          command: deploy
+
+
+      # ==========================================
+      # 17. Finished
+      # ==========================================
+
+      - name: Deployment complete
+        if: success()
+        run: |
+          echo ""
+          echo "======================================"
+          echo "🚀 DEPLOYMENT SUCCESSFUL"
+          echo "======================================"
+          echo ""
+          echo "Your Cloudflare deployment has completed."
